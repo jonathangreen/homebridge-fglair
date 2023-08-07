@@ -1,141 +1,290 @@
-import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
+import {Characteristic, CharacteristicValue, PlatformAccessory, Service} from 'homebridge';
 
-import { ExampleHomebridgePlatform } from './platform';
+import {FujitsuPlatformPlugin} from './platform';
+import {DeviceState, NormalizedProperty, OperationMode} from './fglairApi';
+import {DeviceInfoResponse, DevicePropertiesResponse} from './apiResponse';
 
 /**
  * Platform Accessory
  * An instance of this class is created for each accessory your platform registers
  * Each accessory may expose multiple services of different service types.
  */
-export class ExamplePlatformAccessory {
-  private service: Service;
+export class HeatpumpAccessory {
+  private readonly thermostat: Service;
+  private readonly fan: Service;
+  private readonly hslat: Service;
+  private readonly vslat: Service;
 
-  /**
-   * These are just used to create a working example
-   * You should implement your own code to track the state of your accessory
-   */
-  private exampleStates = {
-    On: false,
-    Brightness: 100,
-  };
+  private remote_state: DeviceState;
+  private local_state: DeviceState;
+
+  private dsn: string;
+
+  private main_loop_counter = 0;
 
   constructor(
-    private readonly platform: ExampleHomebridgePlatform,
+    private readonly platform: FujitsuPlatformPlugin,
     private readonly accessory: PlatformAccessory,
+    private readonly deviceInfo: DeviceInfoResponse,
+    deviceProperties: DevicePropertiesResponse,
   ) {
+    this.dsn = deviceInfo.dsn;
+    this.remote_state = new DeviceState(platform.log, deviceProperties);
+    this.local_state = new DeviceState(platform.log);
 
     // set accessory information
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
-      .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Default-Manufacturer')
-      .setCharacteristic(this.platform.Characteristic.Model, 'Default-Model')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, 'Default-Serial');
+      .setCharacteristic(this.platform.Characteristic.Manufacturer, deviceInfo.product_name)
+      .setCharacteristic(this.platform.Characteristic.Model, deviceInfo.model)
+      .setCharacteristic(this.platform.Characteristic.SerialNumber, deviceInfo.dsn)
+      .setCharacteristic(this.platform.Characteristic.FirmwareRevision, deviceInfo.sw_version)
+      .setCharacteristic(this.platform.Characteristic.Name, this.remote_state.device_name.value);
 
-    // get the LightBulb service if it exists, otherwise create a new LightBulb service
-    // you can create multiple services for each accessory
-    this.service = this.accessory.getService(this.platform.Service.Lightbulb) || this.accessory.addService(this.platform.Service.Lightbulb);
+    // Create the thermostat service
+    this.thermostat = this.createThermostatService();
 
-    // set the service name, this is what is displayed as the default name on the Home app
-    // in this example we are using the name we stored in the `accessory.context` in the `discoverDevices` method.
-    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.exampleDisplayName);
+    // Create the fan service
+    this.fan = this.createFanService(this.thermostat);
 
-    // each service must implement at-minimum the "required characteristics" for the given service type
-    // see https://developers.homebridge.io/#/service/Lightbulb
+    // Create vertical slat
+    this.vslat = this.createVerticalSlatService(this.thermostat);
 
-    // register handlers for the On/Off Characteristic
-    this.service.getCharacteristic(this.platform.Characteristic.On)
-      .onSet(this.setOn.bind(this))                // SET - bind to the `setOn` method below
-      .onGet(this.getOn.bind(this));               // GET - bind to the `getOn` method below
+    // Create horizontal slat
+    this.hslat = this.createHorizontalSlatService(this.thermostat);
 
-    // register handlers for the Brightness Characteristic
-    this.service.getCharacteristic(this.platform.Characteristic.Brightness)
-      .onSet(this.setBrightness.bind(this));       // SET - bind to the 'setBrightness` method below
+    // Set initial state
+    this.updateCurrentTemp();
+    this.updateHeaterCooler();
 
-    /**
-     * Creating multiple services of the same type.
-     *
-     * To avoid "Cannot add a Service with the same UUID another Service without also defining a unique 'subtype' property." error,
-     * when creating multiple services of the same type, you need to use the following syntax to specify a name and subtype id:
-     * this.accessory.getService('NAME') || this.accessory.addService(this.platform.Service.Lightbulb, 'NAME', 'USER_DEFINED_SUBTYPE_ID');
-     *
-     * The USER_DEFINED_SUBTYPE must be unique to the platform accessory (if you platform exposes multiple accessories, each accessory
-     * can use the same sub type id.)
-     */
+    // Main update loop (every second)
+    setInterval(this.mainUpdateLoop.bind(this), 1000);
 
-    // Example: add two "motion sensor" services to the accessory
-    const motionSensorOneService = this.accessory.getService('Motion Sensor One Name') ||
-      this.accessory.addService(this.platform.Service.MotionSensor, 'Motion Sensor One Name', 'YourUniqueIdentifier-1');
-
-    const motionSensorTwoService = this.accessory.getService('Motion Sensor Two Name') ||
-      this.accessory.addService(this.platform.Service.MotionSensor, 'Motion Sensor Two Name', 'YourUniqueIdentifier-2');
-
-    /**
-     * Updating characteristics values asynchronously.
-     *
-     * Example showing how to update the state of a Characteristic asynchronously instead
-     * of using the `on('get')` handlers.
-     * Here we change update the motion sensor trigger states on and off every 10 seconds
-     * the `updateCharacteristic` method.
-     *
-     */
-    let motionDetected = false;
-    setInterval(() => {
-      // EXAMPLE - inverse the trigger
-      motionDetected = !motionDetected;
-
-      // push the new value to HomeKit
-      motionSensorOneService.updateCharacteristic(this.platform.Characteristic.MotionDetected, motionDetected);
-      motionSensorTwoService.updateCharacteristic(this.platform.Characteristic.MotionDetected, !motionDetected);
-
-      this.platform.log.debug('Triggering motionSensorOneService:', motionDetected);
-      this.platform.log.debug('Triggering motionSensorTwoService:', !motionDetected);
-    }, 10000);
+    // Timer to update current temp every 2 minutes
+    setInterval(this.updateCurrentTemp.bind(this), 2 * 60 * 1000);
   }
 
-  /**
-   * Handle "SET" requests from HomeKit
-   * These are sent when the user changes the state of an accessory, for example, turning on a Light bulb.
-   */
-  async setOn(value: CharacteristicValue) {
-    // implement your own code to turn your device on/off
-    this.exampleStates.On = value as boolean;
+  private createThermostatService(): Service {
+    const thermostat = this.accessory.getService(this.platform.Service.Thermostat) ||
+      this.accessory.addService(this.platform.Service.Thermostat);
 
-    this.platform.log.debug('Set Characteristic On ->', value);
+    thermostat.setPrimaryService(true);
+    thermostat.updateCharacteristic(this.platform.Characteristic.ConfiguredName, 'Heatpump');
+
+    this.setHandlers(
+      thermostat.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState),
+      this.remote_state.operation_mode,
+      this.local_state.operation_mode,
+    );
+
+    this.setHandlers(
+      thermostat.getCharacteristic(this.platform.Characteristic.TargetTemperature),
+      this.remote_state.adjust_temperature,
+      this.local_state.adjust_temperature,
+    );
+
+    this.setHandlers(
+      thermostat.getCharacteristic(this.platform.Characteristic.CurrentTemperature),
+      this.remote_state.display_temperature,
+      null,
+    ).setProps({
+      minStep: 0.25,
+    });
+
+    return thermostat;
   }
 
-  /**
-   * Handle the "GET" requests from HomeKit
-   * These are sent when HomeKit wants to know the current state of the accessory, for example, checking if a Light bulb is on.
-   *
-   * GET requests should return as fast as possbile. A long delay here will result in
-   * HomeKit being unresponsive and a bad user experience in general.
-   *
-   * If your device takes time to respond you should update the status of your device
-   * asynchronously instead using the `updateCharacteristic` method instead.
+  private createFanService(mainService: Service): Service {
+    const fan = this.accessory.getService(this.platform.Service.Fan) ||
+      this.accessory.addService(this.platform.Service.Fan);
 
-   * @example
-   * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
-   */
-  async getOn(): Promise<CharacteristicValue> {
-    // implement your own code to check if the device is on
-    const isOn = this.exampleStates.On;
+    fan.setPrimaryService(false);
+    mainService.addLinkedService(fan);
+    fan.addOptionalCharacteristic(this.platform.Characteristic.ConfiguredName);
+    fan.updateCharacteristic(this.platform.Characteristic.ConfiguredName, 'Fan');
 
-    this.platform.log.debug('Get Characteristic On ->', isOn);
+    this.setHandlers(
+      fan.getCharacteristic(this.platform.Characteristic.RotationSpeed),
+      this.remote_state.fan_speed,
+      this.local_state.fan_speed,
+    ).setProps({
+      minValue: 0,
+      maxValue: 100,
+      minStep: 25,
+    });
 
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-
-    return isOn;
+    return fan;
   }
 
-  /**
-   * Handle "SET" requests from HomeKit
-   * These are sent when the user changes the state of an accessory, for example, changing the Brightness
-   */
-  async setBrightness(value: CharacteristicValue) {
-    // implement your own code to set the brightness
-    this.exampleStates.Brightness = value as number;
+  private createVerticalSlatService(mainService: Service) : Service {
+    const vslat = this.accessory.getService('vertical') ||
+      this.accessory.addService(this.platform.Service.Slats, 'vertical', 'v');
 
-    this.platform.log.debug('Set Characteristic Brightness -> ', value);
+    vslat.setPrimaryService(false);
+    mainService.addLinkedService(vslat);
+    vslat.updateCharacteristic(this.platform.Characteristic.SlatType, this.platform.Characteristic.SlatType.VERTICAL);
+    vslat.addOptionalCharacteristic(this.platform.Characteristic.ConfiguredName);
+    vslat.updateCharacteristic(this.platform.Characteristic.ConfiguredName, 'Vertical');
+
+    this.setHandlers(
+      vslat.getCharacteristic(this.platform.Characteristic.SwingMode),
+      this.remote_state.af_vertical_swing,
+      this.local_state.af_vertical_swing,
+    );
+
+    this.setHandlers(
+      vslat.getCharacteristic(this.platform.Characteristic.TargetTiltAngle),
+      this.remote_state.af_vertical_direction,
+      this.local_state.af_vertical_direction,
+    ).setProps({
+      minValue: 0,
+      maxValue: 70,
+      minStep: 10,
+    });
+
+    return vslat;
+  }
+
+  private createHorizontalSlatService(mainService: Service) : Service {
+    const hslat = this.accessory.getService('horizontal') ||
+      this.accessory.addService(this.platform.Service.Slats, 'horizontal', 'h');
+
+    hslat.setPrimaryService(false);
+    mainService.addLinkedService(hslat);
+    hslat.updateCharacteristic(this.platform.Characteristic.SlatType, this.platform.Characteristic.SlatType.HORIZONTAL);
+    hslat.addOptionalCharacteristic(this.platform.Characteristic.ConfiguredName);
+    hslat.updateCharacteristic(this.platform.Characteristic.ConfiguredName, 'Horizontal');
+
+    this.setHandlers(
+      hslat.getCharacteristic(this.platform.Characteristic.SwingMode),
+      this.remote_state.af_horizontal_swing,
+      this.local_state.af_horizontal_swing,
+    );
+
+    this.setHandlers(
+      hslat.getCharacteristic(this.platform.Characteristic.TargetTiltAngle),
+      this.remote_state.af_horizontal_direction,
+      this.local_state.af_horizontal_direction,
+    ).setProps({
+      minValue: -40,
+      maxValue: 40,
+      minStep: 20,
+    });
+
+    return hslat;
+  }
+
+  private updateCurrentTemp() {
+    this.local_state.get_prop.value = true;
+    this.platform.log.debug('updateCurrentTemp');
+  }
+
+  private mainUpdateLoop() {
+    this.main_loop_counter += 1;
+    this.main_loop_counter %= 30;
+
+    // See if we need to send any property updates
+    const initialized = this.local_state.getInitialized();
+    for (const key in initialized) {
+      // Reset any keys in the local state we are about to send.
+      this.local_state[key].reset();
+    }
+    this.platform.log.debug('Event loop: (counter) (local_state)', this.main_loop_counter, initialized);
+    if(Object.keys(initialized).length > 0) {
+      this.platform.DeviceApi.setDeviceProperties(this.dsn, initialized)
+        .then(this.remoteSync.bind(this));
+    } else if (this.main_loop_counter === 0) {
+      // Sync remote values every 30 seconds
+      this.remoteSync();
+    }
+  }
+
+  private onSetState<ValueType, NormalizedType>(
+    x: CharacteristicValue,
+    property: NormalizedProperty<ValueType, NormalizedType>,
+    name: string)
+  {
+    property.normalized_value = x as NormalizedType;
+    this.platform.log.debug(`${name} onSet`, x);
+  }
+
+  private onGetState<ValueType, NormalizedType>(
+    property: NormalizedProperty<ValueType, NormalizedType>,
+    name: string,
+  ): CharacteristicValue {
+    this.platform.log.debug(`${name} onGet`, property.normalized_value);
+    return property.normalized_value as CharacteristicValue;
+  }
+
+  private setHandlers<ValueType, NormalizedType>(
+    characteristic: Characteristic,
+    remote_property: NormalizedProperty<ValueType, NormalizedType>,
+    local_property: NormalizedProperty<ValueType, NormalizedType> | null,
+  ): Characteristic {
+    characteristic.onGet(() => this.onGetState(remote_property, characteristic.constructor.name));
+    if (local_property !== null) {
+      characteristic.onSet(x => this.onSetState(x, local_property, characteristic.constructor.name));
+    }
+
+    return characteristic;
+  }
+
+  protected remoteSync() {
+    this.platform.DeviceApi.getDeviceProperties(this.dsn)
+      .then(getPropertiesResponse => {
+        this.remote_state.setProperties(getPropertiesResponse);
+        this.updateHeaterCooler();
+        this.platform.log.debug('Sync device properties.');
+        this.platform.log.debug('Local state: ', this.local_state.getInitialized());
+        this.platform.log.debug('Remote state: ', this.remote_state.getInitialized());
+      });
+  }
+
+  protected updateHeaterCooler() {
+    if (this.remote_state.operation_mode.initialized()) {
+      this.fan.updateCharacteristic(this.platform.Characteristic.On, this.remote_state.operation_mode.value !== OperationMode.off);
+    }
+
+    if (this.remote_state.adjust_temperature.initialized() &&
+      this.remote_state.display_temperature.initialized() &&
+      this.remote_state.operation_mode.initialized()) {
+      let CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.OFF;
+
+      if (this.remote_state.operation_mode.value === OperationMode.cool ||
+        this.remote_state.operation_mode.value === OperationMode.auto ||
+        this.remote_state.operation_mode.value === OperationMode.dry) {
+        if (this.remote_state.display_temperature.normalized_value > this.remote_state.adjust_temperature.normalized_value) {
+          CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.COOL;
+        }
+      }
+
+      if (this.remote_state.operation_mode.value === OperationMode.heat || this.remote_state.operation_mode.value === OperationMode.auto) {
+        if (this.remote_state.display_temperature.normalized_value < this.remote_state.adjust_temperature.normalized_value) {
+          CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.HEAT;
+        }
+      }
+
+      this.thermostat.updateCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState, CurrentHeatingCoolingState);
+    }
+
+    if (this.remote_state.af_vertical_swing.initialized()) {
+      if (this.remote_state.af_vertical_swing.value) {
+        this.vslat.updateCharacteristic(this.platform.Characteristic.CurrentSlatState,
+          this.platform.Characteristic.CurrentSlatState.SWINGING);
+      } else {
+        this.vslat.updateCharacteristic(this.platform.Characteristic.CurrentSlatState,
+          this.platform.Characteristic.CurrentSlatState.FIXED);
+      }
+    }
+
+    if (this.remote_state.af_horizontal_swing.initialized()) {
+      if (this.remote_state.af_horizontal_swing.value) {
+        this.hslat.updateCharacteristic(this.platform.Characteristic.CurrentSlatState,
+          this.platform.Characteristic.CurrentSlatState.SWINGING);
+      } else {
+        this.hslat.updateCharacteristic(this.platform.Characteristic.CurrentSlatState,
+          this.platform.Characteristic.CurrentSlatState.FIXED);
+      }
+    }
   }
 
 }

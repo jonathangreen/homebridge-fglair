@@ -1,5 +1,5 @@
 {
-  "pluginAlias": "ExampleHomebridgePlugin",
+  "pluginAlias": "FGLair",
   "pluginType": "platform",
   "singular": true,
   "schema": {
@@ -9,7 +9,29 @@
         "title": "Name",
         "type": "string",
         "required": true,
-        "default": "Example Dynamic Platform"
+        "default": "Fujitsu Mini Split",
+        "description": "The name that will appear in the Home App and your homebridge log."
+      },
+      "username": {
+        "title": "Username",
+        "type": "string",
+        "required": true,
+        "default": "",
+        "description": "Username for FGLair App"
+      },
+      "password": {
+        "title": "Password",
+        "type": "string",
+        "required": true,
+        "default": "",
+        "description": "Password for FGLair App"
+      },
+      "mac": {
+        "title": "Mac Address",
+        "type": "string",
+        "required": true,
+        "default": "",
+        "description": "Mac address from FGLair App. Should be prefixed by AC-UTY-."
       }
     }
   }
