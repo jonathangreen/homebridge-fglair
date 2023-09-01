@@ -7,7 +7,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jonathangreen/homebridge-fglair.git"
+    "url": "git+https://github.com/jonathangreen/homebridge-fglair.git"
   },
   "bugs": {
     "url": "https://github.com/jonathangreen/homebridge-fglair/issues"
