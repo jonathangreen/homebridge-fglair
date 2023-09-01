@@ -1,9 +1,9 @@
 {
-  "private": true,
-  "displayName": "Homebridge FGLair",
+  "private": false,
+  "displayName": "Homebridge FGLair (Fujitsu)",
   "name": "homebridge-fglair",
   "version": "1.0.0",
-  "description": "A short description about what your plugin does.",
+  "description": "A homebridge plugin for Fujitsu heatpumps using the FGLair api.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

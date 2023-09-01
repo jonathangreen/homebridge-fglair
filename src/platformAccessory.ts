@@ -54,7 +54,6 @@ export class HeatpumpAccessory {
 
     // Set initial state
     this.updateCurrentTemp();
-    this.updateHeaterCooler();
 
     // Main update loop (every second)
     setInterval(this.mainUpdateLoop.bind(this), 1000);
@@ -90,6 +89,31 @@ export class HeatpumpAccessory {
       minStep: 0.25,
     });
 
+    thermostat.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
+      .onGet(() => {
+        let CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.OFF;
+
+        if (this.remote_state.operation_mode.value === OperationMode.cool ||
+          this.remote_state.operation_mode.value === OperationMode.auto ||
+          this.remote_state.operation_mode.value === OperationMode.dry)
+        {
+          if (this.remote_state.display_temperature.normalized_value > this.remote_state.adjust_temperature.normalized_value) {
+            CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.COOL;
+          }
+        }
+
+        if (this.remote_state.operation_mode.value === OperationMode.heat ||
+          this.remote_state.operation_mode.value === OperationMode.auto)
+        {
+          if (this.remote_state.display_temperature.normalized_value < this.remote_state.adjust_temperature.normalized_value) {
+            CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.HEAT;
+          }
+        }
+
+        this.platform.log.debug('CurrentHeatingCoolingState onGet', CurrentHeatingCoolingState);
+        return CurrentHeatingCoolingState;
+      });
+
     return thermostat;
   }
 
@@ -111,6 +135,13 @@ export class HeatpumpAccessory {
       maxValue: 100,
       minStep: 25,
     });
+
+    fan.getCharacteristic(this.platform.Characteristic.On)
+      .onGet(() => {
+        const value = this.remote_state.operation_mode.value !== OperationMode.off;
+        this.platform.log.debug('On onGet', value);
+        return value;
+      });
 
     return fan;
   }
@@ -141,6 +172,13 @@ export class HeatpumpAccessory {
       minStep: 10,
     });
 
+    vslat.getCharacteristic(this.platform.Characteristic.CurrentSlatState)
+      .onGet(() => {
+        const value = this.slatState(this.remote_state.af_vertical_swing.value);
+        this.platform.log.debug('CurrentSlatState onGet', value);
+        return value;
+      });
+
     return vslat;
   }
 
@@ -169,6 +207,13 @@ export class HeatpumpAccessory {
       maxValue: 40,
       minStep: 20,
     });
+
+    hslat.getCharacteristic(this.platform.Characteristic.CurrentSlatState)
+      .onGet(() => {
+        const value = this.slatState(this.remote_state.af_horizontal_swing.value);
+        this.platform.log.debug('CurrentSlatState onGet', value);
+        return value;
+      });
 
     return hslat;
   }
@@ -232,59 +277,13 @@ export class HeatpumpAccessory {
     this.platform.DeviceApi.getDeviceProperties(this.dsn)
       .then(getPropertiesResponse => {
         this.remote_state.setProperties(getPropertiesResponse);
-        this.updateHeaterCooler();
         this.platform.log.debug('Sync device properties.');
         this.platform.log.debug('Local state: ', this.local_state.getInitialized());
         this.platform.log.debug('Remote state: ', this.remote_state.getInitialized());
       });
   }
 
-  protected updateHeaterCooler() {
-    if (this.remote_state.operation_mode.initialized()) {
-      this.fan.updateCharacteristic(this.platform.Characteristic.On, this.remote_state.operation_mode.value !== OperationMode.off);
-    }
-
-    if (this.remote_state.adjust_temperature.initialized() &&
-      this.remote_state.display_temperature.initialized() &&
-      this.remote_state.operation_mode.initialized()) {
-      let CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.OFF;
-
-      if (this.remote_state.operation_mode.value === OperationMode.cool ||
-        this.remote_state.operation_mode.value === OperationMode.auto ||
-        this.remote_state.operation_mode.value === OperationMode.dry) {
-        if (this.remote_state.display_temperature.normalized_value > this.remote_state.adjust_temperature.normalized_value) {
-          CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.COOL;
-        }
-      }
-
-      if (this.remote_state.operation_mode.value === OperationMode.heat || this.remote_state.operation_mode.value === OperationMode.auto) {
-        if (this.remote_state.display_temperature.normalized_value < this.remote_state.adjust_temperature.normalized_value) {
-          CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.HEAT;
-        }
-      }
-
-      this.thermostat.updateCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState, CurrentHeatingCoolingState);
-    }
-
-    if (this.remote_state.af_vertical_swing.initialized()) {
-      if (this.remote_state.af_vertical_swing.value) {
-        this.vslat.updateCharacteristic(this.platform.Characteristic.CurrentSlatState,
-          this.platform.Characteristic.CurrentSlatState.SWINGING);
-      } else {
-        this.vslat.updateCharacteristic(this.platform.Characteristic.CurrentSlatState,
-          this.platform.Characteristic.CurrentSlatState.FIXED);
-      }
-    }
-
-    if (this.remote_state.af_horizontal_swing.initialized()) {
-      if (this.remote_state.af_horizontal_swing.value) {
-        this.hslat.updateCharacteristic(this.platform.Characteristic.CurrentSlatState,
-          this.platform.Characteristic.CurrentSlatState.SWINGING);
-      } else {
-        this.hslat.updateCharacteristic(this.platform.Characteristic.CurrentSlatState,
-          this.platform.Characteristic.CurrentSlatState.FIXED);
-      }
-    }
+  protected slatState(swing: boolean) {
+    return swing ? this.platform.Characteristic.CurrentSlatState.SWINGING : this.platform.Characteristic.CurrentSlatState.FIXED;
   }
-
 }
