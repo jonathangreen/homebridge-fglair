@@ -95,16 +95,14 @@ export class HeatpumpAccessory {
 
         if (this.remote_state.operation_mode.value === OperationMode.cool ||
           this.remote_state.operation_mode.value === OperationMode.auto ||
-          this.remote_state.operation_mode.value === OperationMode.dry)
-        {
+          this.remote_state.operation_mode.value === OperationMode.dry) {
           if (this.remote_state.display_temperature.normalized_value > this.remote_state.adjust_temperature.normalized_value) {
             CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.COOL;
           }
         }
 
         if (this.remote_state.operation_mode.value === OperationMode.heat ||
-          this.remote_state.operation_mode.value === OperationMode.auto)
-        {
+          this.remote_state.operation_mode.value === OperationMode.auto) {
           if (this.remote_state.display_temperature.normalized_value < this.remote_state.adjust_temperature.normalized_value) {
             CurrentHeatingCoolingState = this.platform.Characteristic.CurrentHeatingCoolingState.HEAT;
           }
@@ -246,8 +244,7 @@ export class HeatpumpAccessory {
   private onSetState<ValueType, NormalizedType>(
     x: CharacteristicValue,
     property: NormalizedProperty<ValueType, NormalizedType>,
-    name: string)
-  {
+    name: string) {
     property.normalized_value = x as NormalizedType;
     this.platform.log.debug(`${name} onSet`, x);
   }

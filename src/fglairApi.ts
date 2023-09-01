@@ -316,8 +316,7 @@ class FanSpeedProperty extends NormalizedProperty<FanSpeed, number> {
   protected normalize(value: FanSpeed): number {
     if (value === FanSpeed.auto) {
       return 0;
-    }
-    else {
+    } else {
       return (value + 1) * 25;
     }
   }
