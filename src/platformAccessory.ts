@@ -15,6 +15,8 @@ export class HeatpumpAccessory {
   private readonly hslat: Service;
   private readonly vslat: Service;
 
+  private readonly fahrenheit: boolean;
+
   private remote_state: DeviceState;
   private local_state: DeviceState;
 
@@ -32,6 +34,9 @@ export class HeatpumpAccessory {
     this.remote_state = new DeviceState(platform.log, deviceProperties);
     this.local_state = new DeviceState(platform.log);
 
+    // Temperature in fahrenheit
+    this.fahrenheit = platform.config['temperature_unit'] !== undefined && platform.config['temperature_unit'] === 'fahrenheit';
+
     // set accessory information
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, deviceInfo.product_name)
@@ -41,7 +46,7 @@ export class HeatpumpAccessory {
       .setCharacteristic(this.platform.Characteristic.Name, this.remote_state.device_name.value);
 
     // Create the thermostat service
-    this.thermostat = this.createThermostatService();
+    this.thermostat = this.createThermostatService(this.fahrenheit);
 
     // Create the fan service
     this.fan = this.createFanService(this.thermostat);
@@ -62,12 +67,21 @@ export class HeatpumpAccessory {
     setInterval(this.updateCurrentTemp.bind(this), 2 * 60 * 1000);
   }
 
-  private createThermostatService(): Service {
+  private createThermostatService(fahrenheit: boolean): Service {
     const thermostat = this.accessory.getService(this.platform.Service.Thermostat) ||
       this.accessory.addService(this.platform.Service.Thermostat);
 
     thermostat.setPrimaryService(true);
     thermostat.updateCharacteristic(this.platform.Characteristic.ConfiguredName, 'Heatpump');
+
+    let temp_unit;
+    if(fahrenheit) {
+      temp_unit = this.platform.Characteristic.TemperatureDisplayUnits.FAHRENHEIT;
+    }
+    else {
+      temp_unit = this.platform.Characteristic.TemperatureDisplayUnits.CELSIUS;
+    }
+    thermostat.updateCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits, temp_unit);
 
     this.setHandlers(
       thermostat.getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState),
@@ -79,14 +93,16 @@ export class HeatpumpAccessory {
       thermostat.getCharacteristic(this.platform.Characteristic.TargetTemperature),
       this.remote_state.adjust_temperature,
       this.local_state.adjust_temperature,
-    );
+    ).setProps({
+      minStep: fahrenheit ? 1 : 0.5,
+    });
 
     this.setHandlers(
       thermostat.getCharacteristic(this.platform.Characteristic.CurrentTemperature),
       this.remote_state.display_temperature,
       null,
     ).setProps({
-      minStep: 0.25,
+      minStep: fahrenheit ? 1 : 0.25,
     });
 
     thermostat.getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
