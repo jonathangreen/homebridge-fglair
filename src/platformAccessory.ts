@@ -77,8 +77,7 @@ export class HeatpumpAccessory {
     let temp_unit;
     if(fahrenheit) {
       temp_unit = this.platform.Characteristic.TemperatureDisplayUnits.FAHRENHEIT;
-    }
-    else {
+    } else {
       temp_unit = this.platform.Characteristic.TemperatureDisplayUnits.CELSIUS;
     }
     thermostat.updateCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits, temp_unit);
