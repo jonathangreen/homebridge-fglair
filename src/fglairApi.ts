@@ -266,23 +266,81 @@ class DummyNormalizedProperty<type> extends NormalizedProperty<type, type> {
 
 }
 
+// These temperature conversion functions are not particularly accurate,
+// but they appear to reflect what the FGLair app is using. Internally
+// the temp is always in C, and the app uses this conversion to report
+// the temp in F. By using the same conversion homekit should agree with
+// the FGLair app.
+// Experimentally here are the values I used to determine these
+// calculations:
+//  F |  C
+// ----------
+// 88 | 30
+// 85 | 28.5
+// 65 | 18.5
+// 64 | 18
+function f_to_c(f: number) {
+  return f / 2 - 14;
+}
+
+function c_to_f(c: number) {
+  return Math.round(2 * c + 28);
+}
+
 class AdjustTempProperty extends NormalizedProperty<number, number> {
+  protected fahrenheit;
+
+  constructor(fahrenheit: boolean) {
+    super();
+    this.fahrenheit = fahrenheit;
+  }
+
   protected normalize(value: number): number {
-    return value / 10;
+    const c = value / 10;
+    if (this.fahrenheit) {
+      return c_to_f(c);
+    } else {
+      return c;
+    }
   }
 
   protected denormalize(value: number): number {
-    return value * 10;
+    let c;
+    if(this.fahrenheit) {
+      c = f_to_c(value);
+    } else {
+      c = value;
+    }
+
+    return c * 10;
   }
 }
 
 class CurrentTempProperty extends NormalizedProperty<number, number> {
+  protected fahrenheit;
+
+  constructor(fahrenheit: boolean) {
+    super();
+    this.fahrenheit = fahrenheit;
+  }
+
   protected normalize(value: number): number {
-    return (value / 100) - 50;
+    const c = (value / 100) - 50;
+    if(this.fahrenheit) {
+      return c_to_f(c);
+    } else {
+      return c;
+    }
   }
 
   protected denormalize(value: number): number {
-    return (value + 50) * 100;
+    let c;
+    if(this.fahrenheit) {
+      c = f_to_c(value);
+    } else {
+      c = value;
+    }
+    return (c + 50) * 100;
   }
 }
 
@@ -372,7 +430,7 @@ enum FanSpeed {
 
 export class DeviceState {
   // update temperature setpoint
-  public adjust_temperature = new AdjustTempProperty();
+  public adjust_temperature;
 
   // 1 - top of range
   // 8 - bottom of range
@@ -404,7 +462,7 @@ export class DeviceState {
   public device_name = new Property<string>();
 
   // display temp - in C
-  public display_temperature = new CurrentTempProperty();
+  public display_temperature;
 
   // 1 - quiet
   // 2 - low
@@ -428,7 +486,10 @@ export class DeviceState {
   // turn on powerful mode
   public powerful_mode = new Property<boolean>();
 
-  constructor(protected log: Logger, device_properties: DevicePropertiesResponse | null = null) {
+  constructor(protected log: Logger, device_properties: DevicePropertiesResponse | null = null, fahrenheit = false) {
+    this.display_temperature = new CurrentTempProperty(fahrenheit);
+    this.adjust_temperature = new AdjustTempProperty(fahrenheit);
+
     if (device_properties !== null) {
       this.setProperties(device_properties);
     }

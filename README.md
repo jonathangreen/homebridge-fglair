@@ -22,7 +22,8 @@ It has the following features I was unable to find in other Fujitsu heat pump pl
       "name": "homebridge-fglair",
       "username": "FGLAIR USERNAME",
       "password": "FGLAIR PASSWORD",
-      "mac": "(See below)"
+      "mac": "(See below)",
+      "temperature_unit": "celsius"
     }
   ]
 }
@@ -36,6 +37,7 @@ It has the following features I was unable to find in other Fujitsu heat pump pl
     then click `Air conditioner Setting`, then expand the name of the Heat pump you would like to connect to homekit
     the app will show the mac address above the friendly name you have set for the heat pump. It will have the format
     `AC-UTY-xxxxxxxxxxxx`.
+- `temperature_unit` either: `celsius` or `fahrenheit`. Defaults to `celsius` if not set.
 
 ## Troubleshooting
 If you have any issues, please create a ticket in github. I'll try to help out as I can.

@@ -32,6 +32,16 @@
         "required": true,
         "default": "",
         "description": "Mac address from FGLair App. Should be prefixed by AC-UTY-."
+      },
+      "temperature_unit": {
+        "title": "Temperature Unit",
+        "type": "string",
+        "default": "celsius",
+        "oneOf": [
+          { "title": "Celsius", "enum": ["celsius"] },
+          { "title": "Fahrenheit", "enum": ["fahrenheit"] }
+        ],
+        "required": false
       }
     }
   }
