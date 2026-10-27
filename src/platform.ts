@@ -67,7 +67,7 @@ export class FujitsuPlatformPlugin implements DynamicPlatformPlugin {
       }
     }
 
-    this.DeviceApi.getDevices().then(
+    return this.DeviceApi.getDevices().then(
       devices => {
         this.log.debug('Device Identifier: ', this.config.mac);
         const prefix = 'ac-uty-';
@@ -97,7 +97,7 @@ export class FujitsuPlatformPlugin implements DynamicPlatformPlugin {
           existingAccessory = undefined;
         }
 
-        this.DeviceApi.getDeviceProperties(device_info.dsn).then(
+        return this.DeviceApi.getDeviceProperties(device_info.dsn).then(
           device_properties => {
             if (existingAccessory) {
               // the accessory already exists
@@ -123,6 +123,9 @@ export class FujitsuPlatformPlugin implements DynamicPlatformPlugin {
           },
         );
       },
-    );
+    ).catch(error => {
+      this.log.error('FGLair discovery failed; retrying in 30 seconds:', error instanceof Error ? error.message : String(error));
+      setTimeout(() => this.discoverDevices(), 30000);
+    });
   }
 }

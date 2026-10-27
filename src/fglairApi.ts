@@ -16,10 +16,12 @@ class FglairApiTokens {
   }
 
   fromResponse(response: AuthResponse) {
-    this.log.debug('FglairApiTokens.fromResponse: ', response);
+    if (!response.access_token || !(response.expires_in > 0)) {
+      throw new Error('FGLair returned an invalid token response');
+    }
     this.expires = Date.now() + (response.expires_in * 1000);
     this.access = response.access_token;
-    this.refresh = response.refresh_token;
+    this.refresh = response.refresh_token || this.refresh;
     this.save();
   }
 
@@ -38,13 +40,13 @@ class FglairApiTokens {
       refresh: this.refresh,
       expires: this.expires,
     });
-    fs.writeFileSync(this.tokenPath, data, {flag: 'w'});
+    fs.writeFileSync(this.tokenPath, data, {flag: 'w', mode: 0o600});
   }
 
   accessTokenValid(): boolean {
     this.log.debug('FglairApiTokens.accessTokenValid now:', Date.now());
     this.log.debug('FglairApiTokens.accessTokenValid expires:', this.expires);
-    return this.expires !== null && this.expires > Date.now();
+    return this.access !== null && this.expires !== null && this.expires > Date.now() + 30000;
   }
 
   initialized(): boolean {
@@ -52,8 +54,15 @@ class FglairApiTokens {
   }
 }
 
+class FglairHttpError extends Error {
+  constructor(public readonly status: number) {
+    super(`FGLair HTTP ${status}`);
+  }
+}
+
 export class FglairApi {
   protected tokens: FglairApiTokens;
+  private authentication?: Promise<void>;
 
   protected static API_GET_ACCESS_TOKEN_URL = 'https://user-field.aylanetworks.com/users/sign_in.json';
   protected static API_GET_REFRESH_TOKEN_URL = 'https://user-field.aylanetworks.com/users/refresh_token.json';
@@ -82,7 +91,7 @@ export class FglairApi {
   }
 
   protected async getTokens() {
-    const response = await fetch(FglairApi.API_GET_ACCESS_TOKEN_URL, {
+    const response = await this.request(FglairApi.API_GET_ACCESS_TOKEN_URL, {
       method: 'POST',
       body: JSON.stringify({
         user: {
@@ -97,11 +106,34 @@ export class FglairApi {
       headers: this.headers(false),
     });
     const decoded = await response.json() as AuthResponse;
-    this.log.debug('FglairApi.getTokens:', decoded);
     this.tokens.fromResponse(decoded);
   }
 
+  protected async request(url: string, options: RequestInit & {headers: Record<string, string>}, retry = true): Promise<Response> {
+    const response = await fetch(url, {...options, signal: AbortSignal.timeout(15000)});
+    if (response.status === 401 && options.headers.Authorization && retry) {
+      await response.body?.cancel();
+      this.tokens.expires = 0;
+      await this.authenticate();
+      return this.request(url, {...options, headers: this.headers()}, false);
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new FglairHttpError(response.status);
+    }
+    return response;
+  }
+
   protected async authenticate() {
+    if (!this.authentication) {
+      this.authentication = this.refreshAuthentication().finally(() => {
+        this.authentication = undefined;
+      });
+    }
+    return this.authentication;
+  }
+
+  private async refreshAuthentication() {
     if (!this.tokens.initialized()) {
       // Tokens not initialized, make an auth request to get
       // our first auth token. This should only happen the first
@@ -119,28 +151,31 @@ export class FglairApi {
     }
 
     this.log.debug('FglairApi.authenticate: Refreshing token.');
-    const response = await fetch(FglairApi.API_GET_REFRESH_TOKEN_URL, {
-      method: 'POST',
-      body: JSON.stringify({
-        user: {
-          refresh_token: this.tokens.refresh,
-        },
-      }),
-      headers: this.headers(false),
-    });
-
-    const decoded = await response.json() as AuthResponse;
-    //this.log.debug('FglairApi.authenticate:', decoded);
-    this.tokens.fromResponse(decoded);
+    try {
+      const response = await this.request(FglairApi.API_GET_REFRESH_TOKEN_URL, {
+        method: 'POST',
+        body: JSON.stringify({user: {refresh_token: this.tokens.refresh}}),
+        headers: this.headers(false),
+      });
+      this.tokens.fromResponse(await response.json() as AuthResponse);
+    } catch (error) {
+      if (!(error instanceof FglairHttpError) || ![401, 403, 422].includes(error.status)) {
+        throw error;
+      }
+      await this.getTokens();
+    }
   }
 
   public async getDevices() {
     await this.authenticate();
-    const response = await fetch(FglairApi.API_GET_DEVICES_URL, {
+    const response = await this.request(FglairApi.API_GET_DEVICES_URL, {
       method: 'GET',
       headers: this.headers(),
     });
     const body = await response.json();
+    if (!Array.isArray(body)) {
+      throw new Error('FGLair returned an invalid device list');
+    }
     //this.log.debug('GetDevices response:', body);
     const devices: Array<DeviceInfoResponse> = [];
     for(const device of body) {
@@ -153,7 +188,7 @@ export class FglairApi {
   public async getDeviceProperties(device: string) {
     await this.authenticate();
     const url = FglairApi.API_GET_DEVICE_PROPERTIES.replace('{DSN}', device);
-    const response = await fetch(url, {
+    const response = await this.request(url, {
       method: 'GET',
       headers: this.headers(),
     });
@@ -184,7 +219,7 @@ export class FglairApi {
       batch_datapoints: datapoints,
     });
     this.log.debug('setDeviceProperties body: ', message_body);
-    const response = await fetch(FglairApi.API_SET_DEVICE_PROPERTIES, {
+    const response = await this.request(FglairApi.API_SET_DEVICE_PROPERTIES, {
       method: 'POST',
       body: message_body,
       headers: this.headers(),
