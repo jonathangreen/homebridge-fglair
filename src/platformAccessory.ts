@@ -23,6 +23,8 @@ export class HeatpumpAccessory {
   private dsn: string;
 
   private main_loop_counter = 0;
+  private updating = false;
+  private retryAfter = 0;
 
   constructor(
     private readonly platform: FujitsuPlatformPlugin,
@@ -236,7 +238,23 @@ export class HeatpumpAccessory {
     this.platform.log.debug('updateCurrentTemp');
   }
 
-  private mainUpdateLoop() {
+  private async mainUpdateLoop() {
+    if (this.updating || Date.now() < this.retryAfter) {
+      return;
+    }
+    this.updating = true;
+    try {
+      await this.updateLoop();
+    } catch (error) {
+      this.retryAfter = Date.now() + 30000;
+      this.main_loop_counter = 29;
+      this.platform.log.error('FGLair update failed; retrying in 30 seconds:', error instanceof Error ? error.message : String(error));
+    } finally {
+      this.updating = false;
+    }
+  }
+
+  private async updateLoop() {
     this.main_loop_counter += 1;
     this.main_loop_counter %= 30;
 
@@ -248,11 +266,20 @@ export class HeatpumpAccessory {
     }
     this.platform.log.debug('Event loop: (counter) (local_state)', this.main_loop_counter, initialized);
     if(Object.keys(initialized).length > 0) {
-      this.platform.DeviceApi.setDeviceProperties(this.dsn, initialized)
-        .then(this.remoteSync.bind(this));
+      try {
+        await this.platform.DeviceApi.setDeviceProperties(this.dsn, initialized);
+      } catch (error) {
+        for (const key in initialized) {
+          if (!this.local_state[key].initialized()) {
+            this.local_state[key].value = initialized[key];
+          }
+        }
+        throw error;
+      }
+      await this.remoteSync();
     } else if (this.main_loop_counter === 0) {
       // Sync remote values every 30 seconds
-      this.remoteSync();
+      await this.remoteSync();
     }
   }
 
@@ -285,8 +312,8 @@ export class HeatpumpAccessory {
     return characteristic;
   }
 
-  protected remoteSync() {
-    this.platform.DeviceApi.getDeviceProperties(this.dsn)
+  protected async remoteSync() {
+    return this.platform.DeviceApi.getDeviceProperties(this.dsn)
       .then(getPropertiesResponse => {
         this.remote_state.setProperties(getPropertiesResponse);
         this.platform.log.debug('Sync device properties.');
